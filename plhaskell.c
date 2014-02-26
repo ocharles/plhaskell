@@ -45,8 +45,6 @@ _PG_init(void)
     static int argc = 1;
 
     hs_init(&argc, &argv_);
-    // hs_add_root(__stginit_PlHaskell);
-    hs_add_root(__stginit_plhaskellzm1zi0zi0_PlHaskell);
 }
 
 Datum
