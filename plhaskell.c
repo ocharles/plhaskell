@@ -31,7 +31,8 @@
 PG_MODULE_MAGIC;
 #endif
 
-extern void __stginit_PlHaskell(void);
+//extern void __stginit_PlHaskell(void);
+extern void __stginit_plhaskellzm1zi0zi0_PlHaskell(void);
 
 extern void _PG_init(void);
 
@@ -44,7 +45,8 @@ _PG_init(void)
     static int argc = 1;
 
     hs_init(&argc, &argv_);
-    hs_add_root(__stginit_PlHaskell);
+    // hs_add_root(__stginit_PlHaskell);
+    hs_add_root(__stginit_plhaskellzm1zi0zi0_PlHaskell);
 }
 
 Datum
@@ -66,7 +68,7 @@ plhaskell_call_handler(PG_FUNCTION_ARGS)
     ReleaseSysCache(retType);
 
     uintptr_t *datum = malloc(sizeof(uintptr_t));
-    char r = plhaskell_test(TextDatumGetCString(prosrcdatum), rvTypeStruct->typname.data, &datum);
+    char r = plhaskell_test(TextDatumGetCString(prosrcdatum), rvTypeStruct->typname.data, &datum, fcinfo->arg);
     if (r < 0)
       elog(ERROR, (const char *) (datum));
 

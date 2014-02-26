@@ -1,0 +1,11 @@
+name: plhaskell
+version: 1.0.0
+cabal-version: >= 1.14
+build-type: Simple
+
+library
+  default-language: Haskell2010
+  exposed-modules: PlHaskell
+  include-dirs:
+    /nix/store/5yx33l0aix8f0dh5gldg21ph1ghm4klb-postgresql-9.3.2/include/server
+  build-depends: base, singletons, hint, constraints

@@ -18,3 +18,7 @@
 *.app
 
 *~
+*.hi
+*_stub.h
+*_stub.c
+dist/
