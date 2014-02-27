@@ -20,6 +20,7 @@ $(singletons [d|
    data PgType
      = PgInt
      | PgString
+     deriving (Show)
   |])
 
 type family InterpretPgType (t :: PgType) :: *
@@ -36,6 +37,7 @@ $(singletons [d|
   data PgFunType
     = PgReturn PgType
     | PgArrow PgType PgFunType
+    deriving (Show)
   |])
 
 type family InterpretFunction (t :: PgFunType) :: *
@@ -54,15 +56,28 @@ spgFunType (SPgArrow _ bs) = \_ -> spgFunType bs
 
 --------------------------------------------------------------------------------
 foreign export ccall
-  plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr () -> IO CChar
+  plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr ()) -> Int -> IO CInt
 
-plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr () -> IO CChar
-plhaskell_test srcPtr typeNamePtr outputPtrPtr arguments = do
+plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr ()) -> Int -> IO CInt
+plhaskell_test srcPtr typeNamePtr outputPtrPtr argTypes argCount argValues datumSize  = do
   src <- peekCString srcPtr
   typeName <- peekCString typeNamePtr
-  types <- return (PgArrow PgInt (PgReturn $ case typeName of
+
+  let determineType ptr n t
+        | n == 0 = return t
+        | n > 0  = do oid <- peek ptr
+                      tail <- determineType (ptr `plusPtr` sizeOf oid) (n - 1) t
+                      return $ PgArrow
+                        (case oid of
+                           23 -> PgInt
+                           n -> error $ "Input OID " ++ show n)
+                        tail
+
+  types <- determineType argTypes argCount (PgReturn $ case typeName of
+                                               "int4" -> PgInt
                                                "int8" -> PgInt
-                                               "text" -> PgString))
+                                               "text" -> PgString
+                                               t -> error t)
 
   withSomeSing types $ \sTypes ->
     case pgFunTypeTypeable sTypes of
@@ -77,21 +92,24 @@ plhaskell_test srcPtr typeNamePtr outputPtrPtr arguments = do
             return (-1)
 
           Right f ->
-            apply sTypes f arguments
+            apply sTypes f argValues
 
   where
 
-  apply :: SPgFunType t -> InterpretFunction t -> Ptr () -> IO CChar
+  apply :: SPgFunType t -> InterpretFunction t -> Ptr (Ptr ()) -> IO CInt
   apply (SPgReturn SPgInt) x _ = do
     poke outputPtrPtr (nullPtr `plusPtr` (fromIntegral x))
-    return 1
-
-  apply (SPgReturn SPgString) x _ = do
-    newCString x >>= poke outputPtrPtr . castPtr
     return 0
 
-  apply (SPgArrow t ts) f args =
+  apply (SPgReturn SPgString) x _ = do
+    (cStrPtr, cStrLen) <- newCStringLen x
+    cStrPtr' <- reallocBytes cStrPtr (cStrLen + 4)
+    moveBytes (cStrPtr' `plusPtr` 4) cStrPtr' cStrLen
+    poke outputPtrPtr (castPtr cStrPtr)
+    return (fromIntegral cStrLen)
+
+  apply (SPgArrow t ts) f arguments =
     case t of
       SPgInt -> do
-        x <- peek (castPtr arguments)
-        apply ts (f x) args
+        x <- fmap (fromIntegral . ptrToIntPtr) (peek arguments)
+        apply ts (f x) (arguments `plusPtr` datumSize)

@@ -23,28 +23,22 @@
 #define STR(a) XSTR(a)
 #define XSTR(a) #a
 
-#include <HsFFI.h>
-
-#include "PlHaskell_stub.h"
-
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
 #endif
 
-//extern void __stginit_PlHaskell(void);
-extern void __stginit_plhaskellzm1zi0zi0_PlHaskell(void);
+#include "dist/build/PlHaskell_stub.h"
 
 extern void _PG_init(void);
 
 PG_FUNCTION_INFO_V1(plhaskell_call_handler);
 
+void plhaskell_init (void);
+
 void
 _PG_init(void)
 {
-    static char *argv[] = { "plhaskell.so", 0 }, **argv_ = argv;
-    static int argc = 1;
-
-    hs_init(&argc, &argv_);
+  plhaskell_init();
 }
 
 Datum
@@ -65,13 +59,27 @@ plhaskell_call_handler(PG_FUNCTION_ARGS)
     ReleaseSysCache(procTup);
     ReleaseSysCache(retType);
 
-    uintptr_t *datum = malloc(sizeof(uintptr_t));
-    char r = plhaskell_test(TextDatumGetCString(prosrcdatum), rvTypeStruct->typname.data, &datum, fcinfo->arg);
-    if (r < 0)
-      elog(ERROR, (const char *) (datum));
+    Oid *argTypes;
+    char **argNames;
+    char *argModes;
+    int argCount = get_func_arg_info(procTup, &argTypes, &argNames, &argModes);
 
-    if (r == 0)
-      return CStringGetTextDatum ((const char*) datum);
-    if (r == 1)
-      return Int32GetDatum( datum );
+    Datum *datum = malloc(sizeof(Datum));
+
+    int r = plhaskell_test(
+        TextDatumGetCString(prosrcdatum),
+        rvTypeStruct->typname.data,
+        datum,
+        argTypes,
+        argCount,
+        fcinfo->arg,
+        sizeof(Datum)
+    );
+
+    if (r < 0)
+      elog(ERROR, (const char *) (*datum));
+    if (r > 0)
+      SET_VARSIZE (*datum, r);
+
+    return *datum;
 }
