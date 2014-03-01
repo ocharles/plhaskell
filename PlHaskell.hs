@@ -19,6 +19,7 @@ import Language.Haskell.Interpreter
 $(singletons [d|
    data PgType
      = PgInt
+     | PgBool
      | PgString
      deriving (Show)
   |])
@@ -26,11 +27,13 @@ $(singletons [d|
 type family InterpretPgType (t :: PgType) :: *
 type instance InterpretPgType 'PgInt = Int32
 type instance InterpretPgType 'PgString = String
+type instance InterpretPgType 'PgBool = Bool
 
 -- all interpretations of PgTypes are Typeable
 pgTypeTypeable :: SPgType t -> Dict (Typeable (InterpretPgType t))
 pgTypeTypeable SPgInt    = Dict
 pgTypeTypeable SPgString = Dict
+pgTypeTypeable SPgBool   = Dict
 
 --------------------------------------------------------------------------------
 $(singletons [d|
@@ -56,28 +59,26 @@ spgFunType (SPgArrow _ bs) = \_ -> spgFunType bs
 
 --------------------------------------------------------------------------------
 foreign export ccall
-  plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr ()) -> Int -> IO CInt
+  plhaskell_test :: CString -> CUInt -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr Int64) -> Int -> IO CInt
 
-plhaskell_test :: CString -> CString -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr ()) -> Int -> IO CInt
-plhaskell_test srcPtr typeNamePtr outputPtrPtr argTypes argCount argValues datumSize  = do
+oidToPgType :: CUInt -> PgType
+oidToPgType oid = case oid of
+                    16 -> PgBool
+                    23 -> PgInt
+                    25 -> PgString
+                    n -> error $ "Type oid " ++ show n ++ " not supported"
+
+plhaskell_test :: CString -> CUInt -> Ptr (Ptr ()) -> Ptr CUInt -> Int -> Ptr (Ptr Int64) -> Int -> IO CInt
+plhaskell_test srcPtr returnType outputPtrPtr argTypes argCount argValues datumSize  = do
   src <- peekCString srcPtr
-  typeName <- peekCString typeNamePtr
 
   let determineType ptr n t
         | n == 0 = return t
         | n > 0  = do oid <- peek ptr
                       tail <- determineType (ptr `plusPtr` sizeOf oid) (n - 1) t
-                      return $ PgArrow
-                        (case oid of
-                           23 -> PgInt
-                           n -> error $ "Input OID " ++ show n)
-                        tail
+                      return $ PgArrow (oidToPgType oid) tail
 
-  types <- determineType argTypes argCount (PgReturn $ case typeName of
-                                               "int4" -> PgInt
-                                               "int8" -> PgInt
-                                               "text" -> PgString
-                                               t -> error t)
+  types <- determineType argTypes argCount (PgReturn $ oidToPgType returnType)
 
   withSomeSing types $ \sTypes ->
     case pgFunTypeTypeable sTypes of
@@ -96,9 +97,13 @@ plhaskell_test srcPtr typeNamePtr outputPtrPtr argTypes argCount argValues datum
 
   where
 
-  apply :: SPgFunType t -> InterpretFunction t -> Ptr (Ptr ()) -> IO CInt
+  apply :: SPgFunType t -> InterpretFunction t -> Ptr (Ptr Int64) -> IO CInt
+  apply (SPgReturn SPgBool) x _ = do
+    poke outputPtrPtr (intPtrToPtr (if x then 1 else 0))
+    return 0
+
   apply (SPgReturn SPgInt) x _ = do
-    poke outputPtrPtr (nullPtr `plusPtr` (fromIntegral x))
+    poke outputPtrPtr (intPtrToPtr (fromIntegral x))
     return 0
 
   apply (SPgReturn SPgString) x _ = do
@@ -113,3 +118,7 @@ plhaskell_test srcPtr typeNamePtr outputPtrPtr argTypes argCount argValues datum
       SPgInt -> do
         x <- fmap (fromIntegral . ptrToIntPtr) (peek arguments)
         apply ts (f x) (arguments `plusPtr` datumSize)
+
+      SPgString -> do
+        str <- peek arguments >>= peekCString . (`plusPtr` 4)
+        apply ts (f str) (arguments `plusPtr` datumSize)

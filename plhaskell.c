@@ -53,11 +53,6 @@ plhaskell_call_handler(PG_FUNCTION_ARGS)
         elog(ERROR, "null prosrc");
 
 	Form_pg_proc procStruct = (Form_pg_proc) GETSTRUCT(procTup);
-    HeapTuple retType = SearchSysCache1(TYPEOID, ObjectIdGetDatum(procStruct->prorettype));
-    Form_pg_type rvTypeStruct = (Form_pg_type) GETSTRUCT(retType);
-
-    ReleaseSysCache(procTup);
-    ReleaseSysCache(retType);
 
     Oid *argTypes;
     char **argNames;
@@ -68,7 +63,7 @@ plhaskell_call_handler(PG_FUNCTION_ARGS)
 
     int r = plhaskell_test(
         TextDatumGetCString(prosrcdatum),
-        rvTypeStruct->typname.data,
+        procStruct->prorettype,
         datum,
         argTypes,
         argCount,
