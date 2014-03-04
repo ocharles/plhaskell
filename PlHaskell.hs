@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -6,6 +8,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module PlHaskell where
 
+import Data.Bits
 import Data.Constraint (Dict(..))
 import Data.Int
 import Data.Singletons
@@ -41,6 +44,14 @@ $(singletons [d|
     = PgReturn PgType
     | PgArrow PgType PgFunType
     deriving (Show)
+
+  isFunction :: PgFunType -> Bool
+  isFunction (PgReturn _) = False
+  isFunction (PgArrow _ _) = True
+
+  functionHead :: PgFunType -> PgType
+  functionHead (PgReturn r) = r
+  functionHead (PgArrow t _) = t
   |])
 
 type family InterpretFunction (t :: PgFunType) :: *
@@ -93,32 +104,38 @@ plhaskell_test srcPtr returnType outputPtrPtr argTypes argCount argValues datumS
             return (-1)
 
           Right f ->
-            apply sTypes f argValues
+            case sTypes of
+              SPgReturn{} -> apply sTypes f
+              SPgArrow{} -> apply sTypes f (castPtr argValues)
 
   where
 
-  apply :: SPgFunType t -> InterpretFunction t -> Ptr (Ptr Int64) -> IO CInt
-  apply (SPgReturn SPgBool) x _ = do
-    poke outputPtrPtr (intPtrToPtr (if x then 1 else 0))
-    return 0
+  apply
+    :: SPgFunType t
+    -> InterpretFunction t
+    -> If (IsFunction t) (Ptr (Datum (FunctionHead t)) -> IO CInt)
+                         (IO CInt)
 
-  apply (SPgReturn SPgInt) x _ = do
-    poke outputPtrPtr (intPtrToPtr (fromIntegral x))
-    return 0
+  apply (SPgReturn t) x = do
+    case hasStorableDatum t of
+      Dict -> do
+        let datum = mkDatumForSPgType t x
+        poke (castPtr outputPtrPtr) datum
+        return (pgTypeSize t x)
 
-  apply (SPgReturn SPgString) x _ = do
-    (cStrPtr, cStrLen) <- newCStringLen x
-    cStrPtr' <- reallocBytes cStrPtr (cStrLen + 4)
-    moveBytes (cStrPtr' `plusPtr` 4) cStrPtr' cStrLen
-    poke outputPtrPtr (castPtr cStrPtr)
-    return (fromIntegral cStrLen)
+  apply (SPgArrow t ts) f = \arguments ->
+    case hasStorableDatum t of
+      Dict -> do
+        MkDatum x <- peek arguments
+        case ts of
+          SPgReturn{} -> apply ts (f x)
+          SPgArrow{} -> apply ts (f x) (arguments `plusPtr` datumSize)
 
-  apply (SPgArrow t ts) f arguments =
-    case t of
-      SPgInt -> do
-        x <- fmap (fromIntegral . ptrToIntPtr) (peek arguments)
-        apply ts (f x) (arguments `plusPtr` datumSize)
+  pgTypeSize :: SPgType t -> InterpretPgType t -> CInt
+  pgTypeSize SPgString x = fromIntegral $ length x
+  pgTypeSize SPgInt _ = 0
+  pgTypeSize SPgBool _ = 0
 
-      SPgString -> do
-        str <- peek arguments >>= peekCString . (`plusPtr` 4)
-        apply ts (f str) (arguments `plusPtr` datumSize)
+  -- I feel like this should be inferrable, but I can't pull that off
+  mkDatumForSPgType :: Storable (Datum t) => SPgType t -> InterpretPgType t -> Datum t
+  mkDatumForSPgType _ x = MkDatum x
