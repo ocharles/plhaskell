@@ -73,8 +73,6 @@ plhaskell_call_handler(PG_FUNCTION_ARGS)
 
     if (r < 0)
       elog(ERROR, (const char *) (*datum));
-    if (r > 0)
-      SET_VARSIZE (*datum, r);
 
     return *datum;
 }
